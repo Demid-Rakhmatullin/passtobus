@@ -21,6 +21,8 @@ namespace PassToBusBot.Controllers
     public class TestController : ApiController
     {
         private static readonly Dictionary<long, RideRequest> _requests = new Dictionary<long, RideRequest>();
+        private static readonly Dictionary<long, List<RideRequest>> _history = new Dictionary<long, List<RideRequest>>();
+
 
         [HttpGet]
         [Route("api/test/cities")]
@@ -79,7 +81,7 @@ namespace PassToBusBot.Controllers
 
             if (update.Type == UpdateType.CallbackQueryUpdate)
             {
-                if(update.CallbackQuery.Data == "showAll" && update.CallbackQuery.Message != null)
+                if (update.CallbackQuery.Data == "showAll" && update.CallbackQuery.Message != null)
                 {
                     hasRequest = _requests.TryGetValue(update.CallbackQuery.Message.Chat.Id,
                         out currentRequest);
@@ -93,11 +95,11 @@ namespace PassToBusBot.Controllers
                     ridesRequest.AddParameter("city_id_start", currentRequest.FromCity.city_id);
                     ridesRequest.AddParameter("city_id_end", currentRequest.ToCity.city_id);
                     ridesRequest.AddParameter("date", currentRequest.Date.Value.ToString("yyyy-MM-dd"));// adds to POST or URL querystring based on Method
-                                                                                   //request.AddUrlSegment("id", "123"); // replaces matching token in request.Resource
+                                                                                                        //request.AddUrlSegment("id", "123"); // replaces matching token in request.Resource
 
                     var hash = CalculateMD5Hash(
                         string.Format("agent_id={3}city_id_start={0}city_id_end={1}date={2}secret_key={4}",
-                        currentRequest.FromCity.city_id, currentRequest.ToCity.city_id, 
+                        currentRequest.FromCity.city_id, currentRequest.ToCity.city_id,
                         date.ToString("yyyy-MM-dd"), agentId, secret));
                     ridesRequest.AddParameter("hash", hash);
                     ridesRequest.AddParameter("agent_id", agentId);
@@ -122,8 +124,43 @@ namespace PassToBusBot.Controllers
 
                     await bot.EditMessageTextAsync(update.CallbackQuery.Message.Chat.Id,
                         update.CallbackQuery.Message.MessageId,
-                        responseMessText, parseMode: ParseMode.Html);
+                        responseMessText, parseMode: ParseMode.Html, replyMarkup: GetShowTopKeyboard());
 
+                }
+                else if (update.CallbackQuery.Data == "showTop" && update.CallbackQuery.Message != null)
+                {
+                    hasRequest = _requests.TryGetValue(update.CallbackQuery.Message.Chat.Id,
+                        out currentRequest);
+
+                    if (!hasRequest)
+                        return Ok();
+
+                    var topRides = GetTopRides(currentRequest, client, agentId, secret);
+
+                    if (string.IsNullOrEmpty(topRides))
+                        return Ok();
+
+                    await bot.EditMessageTextAsync(update.CallbackQuery.Message.Chat.Id,
+                        update.CallbackQuery.Message.MessageId,
+                        topRides, parseMode: ParseMode.Html, replyMarkup: GetShowAllKeyboard());
+                }
+                else if (update.CallbackQuery.Data.StartsWith("h_"))
+                {
+                    var index = int.Parse(update.CallbackQuery.Data.Replace("h_", ""));
+                    if (!_history.ContainsKey(update.CallbackQuery.Message.Chat.Id))
+                        return Ok();
+
+                    var history = _history[update.CallbackQuery.Message.Chat.Id];
+                    if (history == null || history.Count <= index)
+                        return Ok();
+
+                    var topRides = GetTopRides(history[index], client, agentId, secret);
+
+                    if (string.IsNullOrEmpty(topRides))
+                        return Ok();
+
+                    await bot.SendTextMessageAsync(update.CallbackQuery.Message.Chat.Id,
+                        topRides, parseMode: ParseMode.Html, replyMarkup: GetShowAllKeyboard());
                 }
             }
 
@@ -136,22 +173,33 @@ namespace PassToBusBot.Controllers
                     _requests.Remove(update.Message.Chat.Id);
 
                 var helloTemplate = @"
-{0}, привет!
-Я помогу тебе найти рейсы на автобус  по России, Европе и странам СНГ.
-🚐   🇷🇺 🇪🇺 🇺🇦";
+{0}, рад знакомству с тобой. Я постараюсь помочь тебе найти расписание и стоимость билетов на нужный тебе рейс. Давай приступим!";
 
-                await bot.SendTextMessageAsync(update.Message.Chat.Id, 
+                await bot.SendTextMessageAsync(update.Message.Chat.Id,
                     string.Format(helloTemplate, update.Message.From.FirstName));
                 await bot.SendTextMessageAsync(update.Message.Chat.Id,
                     "Откуда вы хотите поехать?");
                 return Ok();
             }
-            else if(update.Message.Text == "Начать новый поиск")
+            else if (update.Message.Text == "Начать новый поиск")
             {
                 if (_requests.ContainsKey(update.Message.Chat.Id))
                     _requests.Remove(update.Message.Chat.Id);
                 await bot.SendTextMessageAsync(update.Message.Chat.Id,
                     "Откуда вы хотите поехать?");
+                return Ok();
+            }
+            else if (update.Message.Text == "История поиска")
+            {
+                if (!_history.ContainsKey(update.Message.Chat.Id))
+                    return await SendInvalidInputMessageAndReturn(bot, update, "История не найдена");
+
+                var history = _history[update.Message.Chat.Id];
+                if (history == null || !history.Any())
+                    return await SendInvalidInputMessageAndReturn(bot, update, "История не найдена");
+
+                await bot.SendTextMessageAsync(update.Message.Chat.Id,
+                    "Вы искали:", replyMarkup: GetHistoryKeyboard(history));
                 return Ok();
             }
 
@@ -186,7 +234,7 @@ namespace PassToBusBot.Controllers
 
                 await bot.SendTextMessageAsync(update.Message.Chat.Id,
                  string.Format("Отлично! Город отправления: {0}\n Теперь укажи город прибытия.", 
-                 fromCity.city_title), replyMarkup: GetResetRequestKeyboard());
+                 fromCity.city_title), replyMarkup: GetResetRequestKeyboard(update.Message.Chat.Id));
             }
             else if(currentRequest.ToCity == null)
             {
@@ -205,12 +253,12 @@ namespace PassToBusBot.Controllers
                 var toCity = JsonConvert.DeserializeObject<CitiesResponse>(response.Content).data.city_list.FirstOrDefault();
                 if (toCity == null)
                     return await SendInvalidInputMessageAndReturn(bot, update, "Город прибытия не найден",
-                        replyMarkup: GetResetRequestKeyboard());
+                        replyMarkup: GetResetRequestKeyboard(update.Message.Chat.Id));
 
                 currentRequest.ToCity = toCity;
                 await bot.SendTextMessageAsync(update.Message.Chat.Id,
                     string.Format("Замечательно! Едем по маршруту {0} - {1}. \n Осталось указать дату, например 20 августа.",
-                    currentRequest.FromCity.city_title, toCity.city_title), replyMarkup: GetResetRequestKeyboard());
+                    currentRequest.FromCity.city_title, toCity.city_title), replyMarkup: GetResetRequestKeyboard(update.Message.Chat.Id));
             }
             else
             {
@@ -220,57 +268,74 @@ namespace PassToBusBot.Controllers
                 var parseResult = DateTime.TryParse(dateString, new CultureInfo("RU-ru"), DateTimeStyles.None, out date);
                 if (!parseResult)
                     return await SendInvalidInputMessageAndReturn(bot, update, "Не получилось понять дату",
-                        replyMarkup: GetResetRequestKeyboard());
+                        replyMarkup: GetResetRequestKeyboard(update.Message.Chat.Id));
 
                 currentRequest.Date = date;
 
-                var ridesRequest = new RestSharp.RestRequest("ride/list", Method.GET);
-                ridesRequest.AddParameter("city_id_start", currentRequest.FromCity.city_id);
-                ridesRequest.AddParameter("city_id_end", currentRequest.ToCity.city_id);
-                ridesRequest.AddParameter("date", date.ToString("yyyy-MM-dd"));// adds to POST or URL querystring based on Method
-                                                                               //request.AddUrlSegment("id", "123"); // replaces matching token in request.Resource
+                var topRides = GetTopRides(currentRequest, client, agentId, secret);
 
-                var hash = CalculateMD5Hash(
-                    string.Format("agent_id={3}city_id_start={0}city_id_end={1}date={2}secret_key={4}",
-                    currentRequest.FromCity.city_id, currentRequest.ToCity.city_id,
-                    date.ToString("yyyy-MM-dd"), agentId, secret));
-                ridesRequest.AddParameter("hash", hash);
-                ridesRequest.AddParameter("agent_id", agentId);
+                if (string.IsNullOrEmpty(topRides))
+                    return await SendInvalidInputMessageAndReturn(bot, update,
+                        string.Format("{0}, к сожалению, у нас нет информации о расписании движения автобусов по твоему запросу. Как только появится рейс, я обязательно тебе сообщу!",
+                        update.Message.From.FirstName),
+                        replyMarkup: GetResetRequestKeyboard(update.Message.Chat.Id));
 
-                var response = client.Execute(ridesRequest);
-                var rides = JsonConvert.DeserializeObject<RideResponse>(response.Content).data.ride_list;
-                rides = rides.Where(r => r.place_cnt > 0).ToArray();
+                if (_history.ContainsKey(update.Message.Chat.Id))
+                {
+                    var list = _history[update.Message.Chat.Id];
+                    list.Insert(0, currentRequest);
+                }
+                else
+                {
+                    var list = new List<RideRequest>();
+                    list.Add(currentRequest);
+                    _history.Add(update.Message.Chat.Id, list);
+                }
 
-                if (!rides.Any())
-                    return await SendInvalidInputMessageAndReturn(bot, update, "На эту дату рейсов нет",
-                        replyMarkup: GetResetRequestKeyboard());
-
-  
-
-                var cheapest = rides.OrderBy(r => r.price_agent_max).First();
-                var fastest = rides.OrderBy(r => (r.datetime_end - r.datetime_start).TotalMinutes).First();
-
-                var responseMessText = "";
-                responseMessText += "Самый дешевый:\n";
-                responseMessText += RenderRideInfo(cheapest);
-                responseMessText += "\n—---------------------------------------------------—\n";
-                responseMessText += "Самый быстрый:\n";
-                responseMessText += RenderRideInfo(fastest);
-
-                //for (int i = 0; i < rides.Length; i++)
-                //{
-                //    var ride = rides[i];
-                //    if (i != rides.Length - 1)
-                //        responseMessText += Environment.NewLine + "—---------------------------------------------------—";
-                //}
-
-                await bot.SendTextMessageAsync(update.Message.Chat.Id, responseMessText, 
+                await bot.SendTextMessageAsync(update.Message.Chat.Id, topRides, 
                     parseMode: ParseMode.Html, replyMarkup: GetShowAllKeyboard());
+
+
                 //bot.OnCallbackQuery += Bot_OnCallbackQuery;
                 //_requests.Remove(update.Message.Chat.Id);
                 //await bot.SendTextMessageAsync(update.Message.Chat.Id, "Для нового поиска введите город отправления");
             }
             return Ok();
+        }
+
+        private string GetTopRides(RideRequest currentRequest, RestClient client, string agentId, string secret)
+        {
+            var ridesRequest = new RestSharp.RestRequest("ride/list", Method.GET);
+            ridesRequest.AddParameter("city_id_start", currentRequest.FromCity.city_id);
+            ridesRequest.AddParameter("city_id_end", currentRequest.ToCity.city_id);
+            ridesRequest.AddParameter("date", currentRequest.Date.Value.ToString("yyyy-MM-dd"));// adds to POST or URL querystring based on Method
+                                                                           //request.AddUrlSegment("id", "123"); // replaces matching token in request.Resource
+
+            var hash = CalculateMD5Hash(
+                string.Format("agent_id={3}city_id_start={0}city_id_end={1}date={2}secret_key={4}",
+                currentRequest.FromCity.city_id, currentRequest.ToCity.city_id,
+                currentRequest.Date.Value.ToString("yyyy-MM-dd"), agentId, secret));
+            ridesRequest.AddParameter("hash", hash);
+            ridesRequest.AddParameter("agent_id", agentId);
+
+            var response = client.Execute(ridesRequest);
+            var rides = JsonConvert.DeserializeObject<RideResponse>(response.Content).data.ride_list;
+            rides = rides.Where(r => r.place_cnt > 0).ToArray();
+
+            if (!rides.Any())
+                return null;
+
+            var cheapest = rides.OrderBy(r => r.price_agent_max).First();
+            var fastest = rides.OrderBy(r => (r.datetime_end - r.datetime_start).TotalMinutes).First();
+
+            var responseMessText = "";
+            responseMessText += "Самый дешевый:\n";
+            responseMessText += RenderRideInfo(cheapest);
+            responseMessText += "\n—---------------------------------------------------—\n";
+            responseMessText += "Самый быстрый:\n";
+            responseMessText += RenderRideInfo(fastest);
+
+            return responseMessText;
         }
 
         private string RenderRideInfo(RideSegmentShort ride)
@@ -306,16 +371,26 @@ namespace PassToBusBot.Controllers
 
         }
 
-        private ReplyKeyboardMarkup GetResetRequestKeyboard()
+        private ReplyKeyboardMarkup GetResetRequestKeyboard(long chatId)
         {
-            var buttons = new KeyboardButton[][]
-                    {
-                        new KeyboardButton[]
-                        {
-                            new KeyboardButton("Начать новый поиск"),
-                        },
-                    };
-            return new ReplyKeyboardMarkup(buttons, true);
+            var buttons = new List<KeyboardButton>();
+            buttons.Add(new KeyboardButton("Начать новый поиск"));
+
+            if (_history.ContainsKey(chatId))
+                if(_history[chatId].Any())
+                    buttons.Add(new KeyboardButton("История поиска"));
+
+            var buttonsModel = new KeyboardButton[buttons.Count][];
+            for (int i = 0; i < buttons.Count; i++)
+                buttonsModel[i] = new KeyboardButton[] { buttons[i] };
+            //{
+            //    new KeyboardButton[]
+            //    {
+            //        new KeyboardButton("Начать новый поиск"),
+            //    },
+            //};
+
+            return new ReplyKeyboardMarkup(buttonsModel, true, true);
         }
 
         private InlineKeyboardMarkup GetShowAllKeyboard()
@@ -326,6 +401,32 @@ namespace PassToBusBot.Controllers
                     };
             return new InlineKeyboardMarkup(buttons);
         }
+
+        private InlineKeyboardMarkup GetShowTopKeyboard()
+        {
+            var buttons = new InlineKeyboardButton[]
+                    {
+                        new InlineKeyboardButton("Показать рекомендованные", "showTop")
+                    };
+            return new InlineKeyboardMarkup(buttons);
+        }
+
+        private InlineKeyboardMarkup GetHistoryKeyboard(List<RideRequest> history)
+        {
+            var buttons = new List<InlineKeyboardButton>();
+            for(int i = 0; i < history.Count; i++)
+            {
+                if (i > 4)
+                    break;
+                var r = history[i];
+                var text = string.Format("{0} - {1} {2}",
+                    r.FromCity.city_title, r.ToCity.city_title, r.Date.Value.ToString("dd MMMM", new CultureInfo("RU-ru")));
+                var id = "h_" + i;
+                buttons.Add(new InlineKeyboardButton(text, id));
+            }
+            return new InlineKeyboardMarkup(buttons.ToArray());
+        }
+
 
         private async Task<IHttpActionResult> SendInvalidInputMessageAndReturn(TelegramBotClient bot, Update update, 
             string text, IReplyMarkup replyMarkup = null)
