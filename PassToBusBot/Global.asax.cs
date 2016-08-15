@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Configuration;
 using System.Linq;
 using System.Web;
 using System.Web.Http;
@@ -31,7 +32,8 @@ namespace PassToBusBot
         public static TelegramBotClient Get()
         {
             if (_bot != null) return _bot;
-            _bot = new TelegramBotClient("222100974:AAEcl7Ko9rJFSnVxKmtVMRZyO3xw0B2WdLU");
+            var token = ConfigurationManager.AppSettings["bot_token"];
+            _bot = new TelegramBotClient(token);
             //_bot.OnCallbackQuery += _bot_OnCallbackQuery;
             //_bot.SetWebhook("https://passtobusbot.azurewebsites.net/api/telegram/webhook");
             return _bot;

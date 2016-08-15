@@ -159,7 +159,21 @@ namespace PassToBusBot.Controllers
                     if (string.IsNullOrEmpty(topRides))
                         return Ok();
 
-                    await bot.SendTextMessageAsync(update.CallbackQuery.Message.Chat.Id,
+                    _requests[update.CallbackQuery.Message.Chat.Id] = history[index];
+
+                    if (_history.ContainsKey(update.Message.Chat.Id))
+                    {
+                        var list = _history[update.Message.Chat.Id];
+                        list.Insert(0, history[index]);
+                    }
+                    else
+                    {
+                        var list = new List<RideRequest>();
+                        list.Add(history[index]);
+                        _history.Add(update.Message.Chat.Id, list);
+                    }
+
+                        await bot.SendTextMessageAsync(update.CallbackQuery.Message.Chat.Id,
                         topRides, parseMode: ParseMode.Html, replyMarkup: GetShowAllKeyboard());
                 }
             }
@@ -186,7 +200,7 @@ namespace PassToBusBot.Controllers
                 if (_requests.ContainsKey(update.Message.Chat.Id))
                     _requests.Remove(update.Message.Chat.Id);
                 await bot.SendTextMessageAsync(update.Message.Chat.Id,
-                    "Откуда вы хотите поехать?");
+                    "Откуда вы хотите поехать? Например, Москва");
                 return Ok();
             }
             else if (update.Message.Text == "История поиска")
@@ -233,7 +247,7 @@ namespace PassToBusBot.Controllers
                                   
 
                 await bot.SendTextMessageAsync(update.Message.Chat.Id,
-                 string.Format("Отлично! Город отправления: {0}\n Теперь укажи город прибытия.", 
+                 string.Format("Отлично! Город отправления: {0}\n Теперь укажи город прибытия. Например, Симферополь.", 
                  fromCity.city_title), replyMarkup: GetResetRequestKeyboard(update.Message.Chat.Id));
             }
             else if(currentRequest.ToCity == null)
@@ -257,7 +271,7 @@ namespace PassToBusBot.Controllers
 
                 currentRequest.ToCity = toCity;
                 await bot.SendTextMessageAsync(update.Message.Chat.Id,
-                    string.Format("Замечательно! Едем по маршруту {0} - {1}. \n Осталось указать дату, например 20 августа.",
+                    string.Format("Замечательно! Едем по маршруту {0} - {1}. \n Осталось указать дату. Например 20 августа.",
                     currentRequest.FromCity.city_title, toCity.city_title), replyMarkup: GetResetRequestKeyboard(update.Message.Chat.Id));
             }
             else
