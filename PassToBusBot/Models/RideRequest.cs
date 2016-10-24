@@ -10,5 +10,6 @@ namespace PassToBusBot.Models
         public City FromCity { get; set; }
         public City ToCity { get; set; }
         public DateTime? Date { get; set; }
+        public IEnumerable<City> TempCities { get; set; }
     }
 }

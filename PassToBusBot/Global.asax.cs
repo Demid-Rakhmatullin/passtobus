@@ -14,9 +14,11 @@ namespace PassToBusBot
         protected void Application_Start()
         {
             GlobalConfiguration.Configure(WebApiConfig.Register);
-            GlobalConfiguration.Configuration.IncludeErrorDetailPolicy
-= IncludeErrorDetailPolicy.Always;
-            GlobalConfiguration.Configuration.Properties.AddOrUpdate("Bot", Bot.Get(), (o1, o2) => { return Bot.Get(); });
+            //GlobalConfiguration.Configuration.IncludeErrorDetailPolicy = IncludeErrorDetailPolicy.Always;
+
+            var webhookUrl = ConfigurationManager.AppSettings["webhook_url"];
+            GlobalConfiguration.Configuration.Properties.AddOrUpdate("Bot", Bot.Get(webhookUrl), (o1, o2) => { return Bot.Get(webhookUrl); });
+            GlobalConfiguration.Configuration.Routes.MapHttpRoute("Webhook", webhookUrl, new { Controller = "Test", Action = "Webhook" });
         }
     }
 
@@ -29,13 +31,14 @@ namespace PassToBusBot
         /// не инициализирован - инициализируем
         /// и возвращаем
         /// </summary>
-        public static TelegramBotClient Get()
+        public static TelegramBotClient Get(string webhookUrl)
         {
+            //return null;
             if (_bot != null) return _bot;
             var token = ConfigurationManager.AppSettings["bot_token"];
             _bot = new TelegramBotClient(token);
             //_bot.OnCallbackQuery += _bot_OnCallbackQuery;
-            //_bot.SetWebhook("https://passtobusbot.azurewebsites.net/api/telegram/webhook");
+            _bot.SetWebhookAsync("https://telegram.bot.buy-ticket.ru/" + webhookUrl).Wait();
             return _bot;
         }
 

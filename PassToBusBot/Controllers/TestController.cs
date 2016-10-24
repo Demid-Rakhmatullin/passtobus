@@ -63,7 +63,6 @@ namespace PassToBusBot.Controllers
         }
 
         [HttpPost]
-        [Route("api/telegram/webhook")]
         public async Task<IHttpActionResult> Webhook(Update update)
         {
             var apiUrl = ConfigurationManager.AppSettings["api_url"];
@@ -148,35 +147,97 @@ namespace PassToBusBot.Controllers
                 {
                     var index = int.Parse(update.CallbackQuery.Data.Replace("h_", ""));
                     if (!_history.ContainsKey(update.CallbackQuery.Message.Chat.Id))
+                    {
+                        await bot.SendTextMessageAsync(update.CallbackQuery.Message.Chat.Id, "Ивиняюсь, не могу повторить запрос из истории.");
+                        await bot.SendTextMessageAsync(update.CallbackQuery.Message.Chat.Id,
+                                "Откуда Вы хотите поехать? Например, Москва");
+
                         return Ok();
+                    }
 
                     var history = _history[update.CallbackQuery.Message.Chat.Id];
                     if (history == null || history.Count <= index)
+                    {
+                        await bot.SendTextMessageAsync(update.CallbackQuery.Message.Chat.Id, "Ивиняюсь, не могу повторить запрос из истории.");
+                        await bot.SendTextMessageAsync(update.CallbackQuery.Message.Chat.Id,
+                                "Откуда Вы хотите поехать? Например, Москва");
+
                         return Ok();
+                    }
 
                     var topRides = GetTopRides(history[index], client, agentId, secret);
 
                     if (string.IsNullOrEmpty(topRides))
-                        return Ok();
-
-                    _requests[update.CallbackQuery.Message.Chat.Id] = history[index];
-
-                    if (_history.ContainsKey(update.Message.Chat.Id))
                     {
-                        var list = _history[update.Message.Chat.Id];
-                        list.Insert(0, history[index]);
-                    }
-                    else
-                    {
-                        var list = new List<RideRequest>();
-                        list.Add(history[index]);
-                        _history.Add(update.Message.Chat.Id, list);
-                    }
-
+                        await bot.SendTextMessageAsync(update.CallbackQuery.Message.Chat.Id, "Ивиняюсь, не могу повторить запрос из истории.");
                         await bot.SendTextMessageAsync(update.CallbackQuery.Message.Chat.Id,
+                                "Откуда Вы хотите поехать? Например, Москва");
+
+                        return Ok();
+                    }
+
+                    //_requests[update.CallbackQuery.Message.Chat.Id] = history[index];
+
+                    //if (_history.ContainsKey(update.CallbackQuery.Message.Chat.Id))
+                    //{
+                    //    var list = _history[update.CallbackQuery.Message.Chat.Id];
+                    //    list.Insert(0, history[index]);
+                    //}
+                    //else
+                    //{
+                    //    var list = new List<RideRequest>();
+                    //    list.Add(history[index]);
+                    //    _history.Add(update.Message.Chat.Id, list);
+                    //}
+
+                    await bot.SendTextMessageAsync(update.CallbackQuery.Message.Chat.Id,
                         topRides, parseMode: ParseMode.Html, replyMarkup: GetShowAllKeyboard());
                 }
-            }
+                else if (update.CallbackQuery.Data.StartsWith("cf_"))
+                {
+                    var cityId = int.Parse(update.CallbackQuery.Data.Replace("cf_", ""));
+
+                    hasRequest = _requests.TryGetValue(update.CallbackQuery.Message.Chat.Id, out currentRequest);
+
+                    if (!hasRequest || currentRequest.TempCities == null || currentRequest.TempCities.All(c => c.city_id != cityId))
+                    {
+                        await bot.SendTextMessageAsync(update.CallbackQuery.Message.Chat.Id, "Ивиняюсь, не могу найти город.");
+                        await bot.SendTextMessageAsync(update.CallbackQuery.Message.Chat.Id,
+                                "Откуда Вы хотите поехать? Например, Москва");
+
+                        return Ok();
+                    }
+
+                    var fromCity = currentRequest.TempCities.First(c => c.city_id == cityId);
+                    currentRequest.FromCity = fromCity;
+
+                    await bot.SendTextMessageAsync(update.CallbackQuery.Message.Chat.Id,
+                        string.Format("Отлично! Город отправления: {0}\nТеперь укажите город прибытия. Например, Симферополь.",
+                        fromCity.city_title)/*, replyMarkup: GetResetRequestKeyboard(update.CallbackQuery.Message.Chat.Id)*/);
+                }
+                else if (update.CallbackQuery.Data.StartsWith("ct_"))
+                {
+                    var cityId = int.Parse(update.CallbackQuery.Data.Replace("ct_", ""));
+
+                    _requests.TryGetValue(update.CallbackQuery.Message.Chat.Id, out currentRequest);
+
+                    if (currentRequest.TempCities == null || currentRequest.TempCities.All(c => c.city_id != cityId))
+                    {
+                        await bot.SendTextMessageAsync(update.CallbackQuery.Message.Chat.Id, "Ивиняюсь, не могу найти город.");
+                        await bot.SendTextMessageAsync(update.CallbackQuery.Message.Chat.Id,
+                                "Укажите город прибытия. Например, Симферополь.");
+
+                        return Ok();
+                    }
+
+                    var toCity = currentRequest.TempCities.First(c => c.city_id == cityId);
+                    currentRequest.ToCity = toCity;
+
+                    await bot.SendTextMessageAsync(update.CallbackQuery.Message.Chat.Id,
+                     string.Format("Замечательно! Едем по маршруту {0} - {1}. \n Осталось указать дату. Например 20 августа.",
+                     currentRequest.FromCity.city_title, toCity.city_title)/*, replyMarkup: GetResetRequestKeyboard(update.CallbackQuery.Message.Chat.Id)*/);
+                }
+            }          
 
             if (update.Message == null || string.IsNullOrWhiteSpace(update.Message.Text))
                 return Ok();
@@ -187,12 +248,12 @@ namespace PassToBusBot.Controllers
                     _requests.Remove(update.Message.Chat.Id);
 
                 var helloTemplate = @"
-{0}, рад знакомству с тобой. Я постараюсь помочь тебе найти расписание и стоимость билетов на нужный тебе рейс. Давай приступим!";
+{0}, рад знакомству с Вами. Я постараюсь помочь Вам найти расписание и стоимость билетов на нужный вам рейс. Любые пожелания по моей работе Вы можете направить на адрес hellobot@buy-ticket.ru. Давайте приступим!";
 
                 await bot.SendTextMessageAsync(update.Message.Chat.Id,
-                    string.Format(helloTemplate, update.Message.From.FirstName));
+                    string.Format(helloTemplate, update.Message.From.FirstName), replyMarkup: GetResetRequestKeyboard(update.Message.Chat.Id));
                 await bot.SendTextMessageAsync(update.Message.Chat.Id,
-                    "Откуда вы хотите поехать?");
+                    "Откуда Вы хотите поехать?");
                 return Ok();
             }
             else if (update.Message.Text == "Начать новый поиск")
@@ -200,17 +261,17 @@ namespace PassToBusBot.Controllers
                 if (_requests.ContainsKey(update.Message.Chat.Id))
                     _requests.Remove(update.Message.Chat.Id);
                 await bot.SendTextMessageAsync(update.Message.Chat.Id,
-                    "Откуда вы хотите поехать? Например, Москва");
+                    "Откуда Вы хотите поехать? Например, Москва", replyMarkup: GetResetRequestKeyboard(update.Message.Chat.Id));
                 return Ok();
             }
             else if (update.Message.Text == "История поиска")
             {
                 if (!_history.ContainsKey(update.Message.Chat.Id))
-                    return await SendInvalidInputMessageAndReturn(bot, update, "История не найдена");
+                    return await SendInvalidInputMessageAndReturn(bot, update, "Извиняюсь, я не запоминаю Вашу историю надолго. Пожалуйста, начните поиск заново.");
 
                 var history = _history[update.Message.Chat.Id];
                 if (history == null || !history.Any())
-                    return await SendInvalidInputMessageAndReturn(bot, update, "История не найдена");
+                    return await SendInvalidInputMessageAndReturn(bot, update, "Извиняюсь, я не запоминаю Вашу историю надолго. Пожалуйста, начните поиск заново.");
 
                 await bot.SendTextMessageAsync(update.Message.Chat.Id,
                     "Вы искали:", replyMarkup: GetHistoryKeyboard(history));
@@ -233,25 +294,41 @@ namespace PassToBusBot.Controllers
                 fromCityRequest.AddParameter("agent_id", agentId);
 
                 var response = client.Execute(fromCityRequest);
-                var fromCity = JsonConvert.DeserializeObject<CitiesResponse>(response.Content).data.city_list.FirstOrDefault();
-                if (fromCity == null)
-                    return await SendInvalidInputMessageAndReturn(bot, update, "Город отправления не найден");
-
-                if (currentRequest == null)
+                var cities = JsonConvert.DeserializeObject<CitiesResponse>(response.Content).data.city_list;
+                if (cities.Count() == 0)
                 {
-                    currentRequest = new RideRequest();
-                    _requests.Add(update.Message.Chat.Id, currentRequest);
+                    return await SendInvalidInputMessageAndReturn(bot, update, "Город отправления не найден"/*, replyMarkup: GetResetRequestKeyboard(update.Message.Chat.Id)*/);
                 }
-                currentRequest.FromCity = fromCity;
+                else if (cities.Count() > 1)
+                {
+                    if (currentRequest == null)
+                    {
+                        currentRequest = new RideRequest();
+                        _requests.Add(update.Message.Chat.Id, currentRequest);
+                    }
+                    currentRequest.TempCities = cities;
 
-                                  
+                    await SendInvalidInputMessageAndReturn(bot, update, "Найдено больше одного города по Вашему запросу:", replyMarkup: GetCitiesKeyboard(cities, true));
+                }
+                else
+                {
+                    var fromCity = cities.FirstOrDefault();
 
-                await bot.SendTextMessageAsync(update.Message.Chat.Id,
-                 string.Format("Отлично! Город отправления: {0}\n Теперь укажи город прибытия. Например, Симферополь.", 
-                 fromCity.city_title), replyMarkup: GetResetRequestKeyboard(update.Message.Chat.Id));
+                    if (currentRequest == null)
+                    {
+                        currentRequest = new RideRequest();
+                        _requests.Add(update.Message.Chat.Id, currentRequest);
+                    }
+                    currentRequest.FromCity = fromCity;
+
+                    await bot.SendTextMessageAsync(update.Message.Chat.Id,
+                        string.Format("Отлично! Город отправления: {0}\nТеперь укажите город прибытия. Например, Симферополь.",
+                        fromCity.city_title)/*, replyMarkup: GetResetRequestKeyboard(update.Message.Chat.Id)*/);
+                }
             }
             else if(currentRequest.ToCity == null)
             {
+                currentRequest.TempCities = null;
                 var toCityName = update.Message.Text;
 
                 var toCityRequest = new RestRequest("city/list/to", Method.GET);
@@ -264,25 +341,40 @@ namespace PassToBusBot.Controllers
                 toCityRequest.AddParameter("agent_id", agentId);
 
                 var response = client.Execute(toCityRequest);
-                var toCity = JsonConvert.DeserializeObject<CitiesResponse>(response.Content).data.city_list.FirstOrDefault();
-                if (toCity == null)
-                    return await SendInvalidInputMessageAndReturn(bot, update, "Город прибытия не найден",
-                        replyMarkup: GetResetRequestKeyboard(update.Message.Chat.Id));
+                var cities = JsonConvert.DeserializeObject<CitiesResponse>(response.Content).data.city_list;
+                if (cities.Count() == 0)
+                {
+                    return await SendInvalidInputMessageAndReturn(bot, update, "Город отправления не найден"/*, replyMarkup: GetResetRequestKeyboard(update.Message.Chat.Id)*/);
+                }
+                else if (cities.Count() > 1)
+                {
+                    currentRequest.TempCities = cities;
 
-                currentRequest.ToCity = toCity;
-                await bot.SendTextMessageAsync(update.Message.Chat.Id,
-                    string.Format("Замечательно! Едем по маршруту {0} - {1}. \n Осталось указать дату. Например 20 августа.",
-                    currentRequest.FromCity.city_title, toCity.city_title), replyMarkup: GetResetRequestKeyboard(update.Message.Chat.Id));
+                    await SendInvalidInputMessageAndReturn(bot, update, "Найдено больше одного города по Вашему запросу:", replyMarkup: GetCitiesKeyboard(cities, false));
+                }
+                else
+                {
+                    var toCity = cities.First();
+
+                    currentRequest.ToCity = toCity;
+                    await bot.SendTextMessageAsync(update.Message.Chat.Id,
+                        string.Format("Замечательно! Едем по маршруту {0} - {1}. \n Осталось указать дату. Например 20 августа.",
+                        currentRequest.FromCity.city_title, toCity.city_title)/*, replyMarkup: GetResetRequestKeyboard(update.Message.Chat.Id)*/);
+                }
             }
             else
             {
+                currentRequest.TempCities = null;
                 var dateString = update.Message.Text;
 
                 DateTime date;
                 var parseResult = DateTime.TryParse(dateString, new CultureInfo("RU-ru"), DateTimeStyles.None, out date);
                 if (!parseResult)
-                    return await SendInvalidInputMessageAndReturn(bot, update, "Не получилось понять дату",
-                        replyMarkup: GetResetRequestKeyboard(update.Message.Chat.Id));
+                    return await SendInvalidInputMessageAndReturn(bot, update, "Не получилось понять дату"/*,
+                        replyMarkup: GetResetRequestKeyboard(update.Message.Chat.Id)*/);
+
+                if (date < DateTime.UtcNow)
+                    date.AddYears(1);
 
                 currentRequest.Date = date;
 
@@ -290,9 +382,8 @@ namespace PassToBusBot.Controllers
 
                 if (string.IsNullOrEmpty(topRides))
                     return await SendInvalidInputMessageAndReturn(bot, update,
-                        string.Format("{0}, к сожалению, у нас нет информации о расписании движения автобусов по твоему запросу. Как только появится рейс, я обязательно тебе сообщу!",
-                        update.Message.From.FirstName),
-                        replyMarkup: GetResetRequestKeyboard(update.Message.Chat.Id));
+                        string.Format("{0}, к сожалению, у нас нет информации о расписании движения автобусов по Вашему запросу. Как только появится рейс, я обязательно Вам сообщу!",
+                        update.Message.From.FirstName)/*, replyMarkup: GetResetRequestKeyboard(update.Message.Chat.Id)*/);
 
                 if (_history.ContainsKey(update.Message.Chat.Id))
                 {
@@ -304,10 +395,13 @@ namespace PassToBusBot.Controllers
                     var list = new List<RideRequest>();
                     list.Add(currentRequest);
                     _history.Add(update.Message.Chat.Id, list);
+                    if (_history.Count > 10)
+                        _history.Remove(_history.Keys.First());
                 }
 
                 await bot.SendTextMessageAsync(update.Message.Chat.Id, topRides, 
                     parseMode: ParseMode.Html, replyMarkup: GetShowAllKeyboard());
+                //await bot.SendTextMessageAsync(update.Message.Chat.Id, "", replyMarkup: GetResetRequestKeyboard(update.Message.Chat.Id));
 
 
                 //bot.OnCallbackQuery += Bot_OnCallbackQuery;
@@ -371,7 +465,7 @@ namespace PassToBusBot.Controllers
 💰 Стоимость билета: {8} руб.
 🛋 Свободных мест: {9}
 
-<a href=""https://buy-ticket.ru/lk/reservation/{10}"">Забронировать</a>
+<a href=""https://buy-ticket.ru/lk/reservation/{10}?ref=b"">Забронировать</a>
 ";
             var russianCulture = new CultureInfo("RU-ru");
 
@@ -404,7 +498,7 @@ namespace PassToBusBot.Controllers
             //    },
             //};
 
-            return new ReplyKeyboardMarkup(buttonsModel, true, true);
+            return new ReplyKeyboardMarkup(buttonsModel, true, false);
         }
 
         private InlineKeyboardMarkup GetShowAllKeyboard()
@@ -430,7 +524,7 @@ namespace PassToBusBot.Controllers
             var buttons = new List<InlineKeyboardButton>();
             for(int i = 0; i < history.Count; i++)
             {
-                if (i > 4)
+                if (i > 10)
                     break;
                 var r = history[i];
                 var text = string.Format("{0} - {1} {2}",
@@ -439,6 +533,23 @@ namespace PassToBusBot.Controllers
                 buttons.Add(new InlineKeyboardButton(text, id));
             }
             return new InlineKeyboardMarkup(buttons.ToArray());
+        }
+
+        private InlineKeyboardMarkup GetCitiesKeyboard(IEnumerable<City> cities, bool from)
+        {
+            var buttons = new InlineKeyboardButton[cities.Count()][];
+            int i = 0;
+            foreach (var city in cities)
+            {
+                var text = city.city_title;
+                if (!string.IsNullOrEmpty(city.region_title))
+                    text += ", " + city.region_title;
+                text += ", " + city.country_title; 
+                var id = (from ? "cf" : "ct") + "_" + city.city_id;
+                buttons[i]= new InlineKeyboardButton[] { new InlineKeyboardButton(text, id) };
+                i++;
+            }
+            return new InlineKeyboardMarkup(buttons);
         }
 
 
